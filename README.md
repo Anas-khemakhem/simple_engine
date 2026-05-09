@@ -4,8 +4,8 @@
 
 ![C++](https://shields.io)
 ![Raylib](https://shields.io)
-![CMake](https://shields.io)
-![License](https://shields.io)
+![Physics](https://shields.io)
+![Math](https://shields.io)
 
 **A high-performance C++ simulation engine implementing symplectic numerical integration, iterative constraint solvers, and lift-induced aerodynamics.**
 
