@@ -21,6 +21,27 @@ inline float Cross(const Vec2& a, const Vec2& b) { return a.x * b.y - a.y * b.x;
 inline Vec2 Cross(float s, const Vec2& a) { return {-s * a.y, s * a.x}; }
 inline Vec2 Cross(const Vec2& a, float s) { return {s * a.y, -s * a.x}; }
 
+// 2x2 Matrix for affine transformations, rotation tensors, and Jacobian formulations 
+struct Mat2 {
+    float m[2][2];
+    Mat2() { m[0][0] = 0; m[0][1] = 0; m[1][0] = 0; m[1][1] = 0; }
+    Mat2(float m00, float m01, float m10, float m11) {
+        m[0][0] = m00; m[0][1] = m01;
+        m[1][0] = m10; m[1][1] = m11;
+    }
+    Mat2(float angle) {
+        float c = std::cos(angle), s = std::sin(angle);
+        m[0][0] = c; m[0][1] = -s;
+        m[1][0] = s; m[1][1] = c;
+    }
+    Vec2 operator*(const Vec2& rhs) const {
+        return Vec2(m[0][0] * rhs.x + m[0][1] * rhs.y, m[1][0] * rhs.x + m[1][1] * rhs.y);
+    }
+    Mat2 Transpose() const {
+        return Mat2(m[0][0], m[1][0], m[0][1], m[1][1]);
+    }
+};
+
 enum class ShapeType { CIRCLE, AABB };
 
 struct RigidBody {
@@ -155,10 +176,51 @@ public:
     }
 
     void Step(float dt, int iterations = 10) {
+        // Advanced Fluid Dynamics & Aerodynamics Parameters
+        const float rho = 1.225f; // Ambient air density (kg/m^3) at sea level
+
         for (auto& b : bodies) {
             if (b.inv_mass == 0.0f) continue;
+            
+            // --- Advanced Aerodynamic Drag (Quadratic Profile) ---
+            float vSq = b.velocity.LengthSq();
+            if (vSq > 0.0001f) {
+                float v = std::sqrt(vSq);
+                // Compute cross-sectional area and drag coefficient
+                float area = (b.shape == ShapeType::CIRCLE) ? (3.14159f * b.radius * b.radius) : (b.half_size.x * 2.0f * b.half_size.y * 2.0f);
+                float cd = (b.shape == ShapeType::CIRCLE) ? 0.47f : 1.05f; // Drag coefficient
+                
+                // Rayleigh Drag Equation: F_d = -0.5 * rho * v^2 * C_d * A * normalize(v)
+                Vec2 vDir = b.velocity / v;
+                float dragMag = 0.5f * rho * vSq * cd * area;
+                // Scale bounds to avoid instability at ludicrous speeds
+                dragMag = std::min(dragMag, b.mass * 1000.0f); 
+                b.force -= vDir * dragMag;
+
+                // --- Magnus Effect (Lift induced by rotation in fluid) ---
+                if (b.shape == ShapeType::CIRCLE && std::abs(b.angular_velocity) > 0.1f) {
+                    // Lift Coefficient roughly proportional to spin ratio
+                    float spinRatio = (b.radius * b.angular_velocity) / v;
+                    float cl = std::min(std::max(spinRatio, -1.5f), 1.5f); // Cap lift
+                    float liftMag = 0.5f * rho * vSq * cl * area;
+                    // Compute orthogonal lift vector (cross product with Z-axis)
+                    Vec2 liftDir = Cross(vDir, 1.0f); 
+                    b.force += liftDir * liftMag;
+                }
+            }
+            
+            // Damping for angular velocity
+            b.torque -= b.angular_velocity * 0.1f * b.inertia; 
+
+            // Symplectic Euler Integration
             b.velocity += (gravity + b.force * b.inv_mass) * dt;
             b.angular_velocity += (b.torque * b.inv_inertia) * dt;
+            
+            // Update orientation matrices and positions bounds implicitly
+            b.position += b.velocity * dt;
+            b.angle += b.angular_velocity * dt;
+            
+            // Reset accumulators
             b.force = {0, 0}; b.torque = 0;
         }
 
@@ -194,15 +256,76 @@ public:
             }
         }
 
+        // Iterative Constraint Solver
         for (int i = 0; i < iterations; ++i) {
-            for (auto& m : manifolds) ResolveCollision(m);
+            for (auto& m : manifolds) {
+                const float percent = 0.8f; // Penetration percentage to correct
+                const float slop = 0.01f; // Penetration allowance
+                float maxPen = std::max(m.penetration - slop, 0.0f);
+                Vec2 correction = m.normal * (maxPen / (m.a->inv_mass + m.b->inv_mass) * percent);
+                m.a->position -= correction * m.a->inv_mass;
+                m.b->position += correction * m.b->inv_mass;
+
+                // Impulse resolution using matrices and inverse mass tensors
+                Vec2 refA = m.contact - m.a->position;
+                Vec2 refB = m.contact - m.b->position;
+                
+                Vec2 velA = m.a->velocity + Cross(m.a->angular_velocity, refA);
+                Vec2 velB = m.b->velocity + Cross(m.b->angular_velocity, refB);
+                Vec2 rv = velB - velA;
+
+                float contactVel = rv.Dot(m.normal);
+                if (contactVel > 0) continue;
+
+                float e = std::min(m.a->restitution, m.b->restitution);
+                
+                // Jacobian effective mass calculation (J * M^-1 * J^T)
+                float raCrossN = Cross(refA, m.normal);
+                float rbCrossN = Cross(refB, m.normal);
+                float invMassSum = m.a->inv_mass + m.b->inv_mass 
+                                 + (raCrossN * raCrossN) * m.a->inv_inertia 
+                                 + (rbCrossN * rbCrossN) * m.b->inv_inertia;
+
+                float j = -(1.0f + e) * contactVel / invMassSum;
+                Vec2 impulse = m.normal * j;
+
+                // Apply Normal Impulse
+                m.a->velocity -= impulse * m.a->inv_mass;
+                m.a->angular_velocity -= m.a->inv_inertia * Cross(refA, impulse);
+                m.b->velocity += impulse * m.b->inv_mass;
+                m.b->angular_velocity += m.b->inv_inertia * Cross(refB, impulse);
+                
+                // Friction calculation along tangent matrix basis
+                Vec2 tangent = rv - (m.normal * rv.Dot(m.normal));
+                if (tangent.LengthSq() > 0.0001f) {
+                    tangent = tangent / tangent.Length();
+                    float raCrossT = Cross(refA, tangent);
+                    float rbCrossT = Cross(refB, tangent);
+                    
+                    float invMassFrictionSum = m.a->inv_mass + m.b->inv_mass 
+                                             + (raCrossT * raCrossT) * m.a->inv_inertia 
+                                             + (rbCrossT * rbCrossT) * m.b->inv_inertia;
+                    
+                    float jt = -rv.Dot(tangent) / invMassFrictionSum;
+                    float mu = std::sqrt(m.a->friction * m.b->friction);
+                    
+                    // Coloumb's law clamping
+                    Vec2 frictionImpulse;
+                    if (std::abs(jt) < j * mu) {
+                        frictionImpulse = tangent * jt;
+                    } else {
+                        frictionImpulse = tangent * (-j * mu);
+                    }
+                    
+                    m.a->velocity -= frictionImpulse * m.a->inv_mass;
+                    m.a->angular_velocity -= m.a->inv_inertia * Cross(refA, frictionImpulse);
+                    m.b->velocity += frictionImpulse * m.b->inv_mass;
+                    m.b->angular_velocity += m.b->inv_inertia * Cross(refB, frictionImpulse);
+                }
+            }
         }
 
-        for (auto& b : bodies) {
-            b.position += b.velocity * dt;
-            b.angle += b.angular_velocity * dt;
-        }
-        for (auto& m : manifolds) CorrectPosition(m);
+        // Implicit integration already done directly on force accumulator (Euler integration)
     }
 
 private:

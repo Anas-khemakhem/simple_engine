@@ -1,5 +1,6 @@
 #include "raylib.h"
 #include "raymath.h"
+#include "rlgl.h"
 #include "PhysicsEngine.hpp"
 
 size_t CreateSoftBox(PhysicsWorld& world, float x, float y, float size) {
@@ -24,10 +25,10 @@ int main() {
     SetTargetFPS(60);
 
     Camera3D camera = { 0 };
-    camera.position = Vector3{ 0.0f, 25.0f, 80.0f }; 
-    camera.target = Vector3{ 0.0f, 10.0f, 0.0f };    
+    camera.position = Vector3{ 0.0f, 2.0f, 80.0f }; // Human eye level on the laboratory walkway
+    camera.target = Vector3{ 0.0f, 2.0f, 0.0f };    
     camera.up = Vector3{ 0.0f, 1.0f, 0.0f };         
-    camera.fovy = 45.0f;
+    camera.fovy = 60.0f;
     camera.projection = CAMERA_PERSPECTIVE;
 
     DisableCursor(); 
@@ -35,35 +36,59 @@ int main() {
     PhysicsWorld world;
     world.gravity = {0.0f, -40.0f};
 
-    // Static bounds
+    // Static bounds (Virtual Simulation Chamber)
     world.AddBody(RigidBody::CreateAABB(Vec2{0, -5}, Vec2{80.0f, 5.0f}, 0.0f, 0.5f));
     world.AddBody(RigidBody::CreateAABB(Vec2{-60, 20}, Vec2{5.0f, 50.0f}, 0.0f, 0.5f));
     world.AddBody(RigidBody::CreateAABB(Vec2{60, 20}, Vec2{5.0f, 50.0f}, 0.0f, 0.5f));
 
-    // A simple pyramid of standard rigid boxes
-    for (int y = 0; y < 10; ++y) {
-        for (int x = 0; x < 10 - y; ++x) {
-            float xPos = -18.0f + (x * 4.2f) + (y * 2.1f);
-            float yPos = 2.0f + (y * 4.2f);
-            world.AddBody(RigidBody::CreateAABB(Vec2{xPos, yPos}, Vec2{2.0f, 2.0f}, 1.0f, 0.3f));
-        }
-    }
-
-    // A few normal bouncing balls
-    world.AddBody(RigidBody::CreateCircle(Vec2{-30, 30}, 3.0f, 1.0f, 0.8f));
-    world.AddBody(RigidBody::CreateCircle(Vec2{30, 40}, 4.0f, 2.0f, 0.7f));
-
     float timeAccumulator = 0.0f;
     const float fixedTimeStep = 1.0f / 120.0f; // High frequency for stability
 
-    while (!WindowShouldClose()) {
-        UpdateCamera(&camera, CAMERA_FREE);
+    // Simulator user-controlled parameters
+    float injectSpeed = 150.0f;
+    float injectSpin = 0.0f;   // 0 = Normal Ball (no lift), > 0 = Magnus Effect
+    float injectRadius = 2.5f;
+    float injectMass = 15.0f;
+    float targetGhostTime = 2.0f; // Predict where it will be at this exact future time
 
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            Vector3 fwd = Vector3Subtract(camera.target, camera.position);
-            fwd = Vector3Normalize(fwd);
-            size_t bId = world.AddBody(RigidBody::CreateCircle(Vec2{camera.position.x, camera.position.y}, 2.5f, 10.0f, 0.6f));
-            world.bodies[bId].velocity = Vec2{fwd.x, fwd.y} * 180.0f; 
+    while (!WindowShouldClose()) {
+        // Handle input for simulator parameters
+        if (IsKeyDown(KEY_UP)) injectSpeed += 100.0f * GetFrameTime();
+        if (IsKeyDown(KEY_DOWN)) injectSpeed -= 100.0f * GetFrameTime();
+        if (IsKeyDown(KEY_RIGHT)) injectSpin += 100.0f * GetFrameTime();
+        if (IsKeyDown(KEY_LEFT)) injectSpin -= 100.0f * GetFrameTime();
+        
+        if (IsKeyDown(KEY_EQUAL) || IsKeyDown(KEY_KP_ADD)) injectRadius += 2.0f * GetFrameTime();
+        if (IsKeyDown(KEY_MINUS) || IsKeyDown(KEY_KP_SUBTRACT)) injectRadius -= 2.0f * GetFrameTime();
+        if (injectRadius < 0.5f) injectRadius = 0.5f;
+
+        if (IsKeyDown(KEY_T)) targetGhostTime -= 2.0f * GetFrameTime();
+        if (IsKeyDown(KEY_Y)) targetGhostTime += 2.0f * GetFrameTime();
+        if (targetGhostTime < 0.1f) targetGhostTime = 0.1f;
+        if (targetGhostTime > 15.0f) targetGhostTime = 15.0f;
+        
+        // Quick presets
+        if (IsKeyPressed(KEY_ONE)) { injectSpin = 0.0f; injectRadius = 2.5f; } // Normal Ball
+        if (IsKeyPressed(KEY_TWO)) { injectSpin = 200.0f; injectRadius = 2.5f; } // Curveball / Magnus Component
+        if (IsKeyPressed(KEY_THREE)) { injectSpin = 0.0f; injectRadius = 8.0f; } // Massive Drag (Parachute effect)
+
+        UpdateCamera(&camera, CAMERA_FIRST_PERSON); // Smooth FPS-style exploration
+
+        // Constrain camera height to simulate walking on the laboratory floor
+        if (camera.position.y < 2.0f) camera.position.y = 2.0f;
+        if (camera.position.y > 2.0f) camera.position.y -= 10.0f * GetFrameTime(); // Gentle gravity for observer
+        
+        Vector3 mTarget = Vector3Subtract(camera.target, camera.position);
+        Vector3 fwd = Vector3Normalize(mTarget);
+        float t_val = (0.0f - camera.position.z) / (fwd.z != 0 ? fwd.z : 0.001f);
+        Vector3 hitPoint = Vector3Add(camera.position, Vector3Scale(fwd, t_val));
+
+        // Use KEY_E (or 'é') to launch instead of mouse clicks so it doesn't happen accidentally
+        if (IsKeyPressed(KEY_E)) {
+            // Kinematic particle injection
+            size_t bId = world.AddBody(RigidBody::CreateCircle(Vec2{hitPoint.x, hitPoint.y}, injectRadius, injectMass, 0.4f));
+            world.bodies[bId].velocity = Vec2{fwd.x, fwd.y} * injectSpeed; 
+            world.bodies[bId].angular_velocity = injectSpin; 
         }
 
         // Fixed timestep for physics stability
@@ -84,12 +109,129 @@ int main() {
         }
 
         BeginDrawing();
-        ClearBackground(RAYWHITE);
+        ClearBackground((Color){ 10, 15, 22, 255 }); // Deep dark blue background for focus
         BeginMode3D(camera);
 
-        DrawGrid(30, 10.0f);
+        // Draw Laboratory Floor
+        DrawGrid(100, 10.0f); // 3D Walkway grid
+        
+        // Draw 2D Simulation Plane (Z=0 Reference Grid)
+        rlPushMatrix();
+            rlRotatef(90.0f, 1.0f, 0.0f, 0.0f); // Rotate grid to stand vertically
+            DrawGrid(100, 5.0f);
+        rlPopMatrix();
 
-        // Draw joints
+        // -------------------------
+        // MATH & SIMULATOR FEATURE: TRAJECTORY PREDICTOR
+        // Calculate Numerical Integration via Symplectic Euler Predictor to show projectile path
+        // It demonstrates mathematical modeling of aerodynamic forces using the same solver parameters
+        // -------------------------
+        Vec2 predPos = {hitPoint.x, hitPoint.y};
+        Vec2 predVel = Vec2{fwd.x, fwd.y} * injectSpeed;
+        float predAngVel = injectSpin;
+        
+        // Find out exactly how many integration steps are needed to reach the target ghost time
+        int predictionSteps = (int)(targetGhostTime / fixedTimeStep);
+        Vec2 ghostPosition = predPos;
+
+        rlSetLineWidth(2.0f);
+        BeginBlendMode(BLEND_ADDITIVE);
+        // Compute path exactly up to the target time
+        for (int k = 0; k < predictionSteps; ++k) {
+            Vec2 oldPos = predPos;
+            
+            float vSq = predVel.LengthSq();
+            Vec2 predForce = {0,0};
+            if (vSq > 0.001f) {
+                float v = std::sqrt(vSq);
+                float area = 3.14159f * injectRadius * injectRadius;
+                
+                // Rayleigh Drag formulation predictor: (F_d = -0.5 * p * v^2 * Cd * A)
+                float dragMag = 0.5f * 1.225f * vSq * 0.47f * area;
+                dragMag = std::min(dragMag, injectMass * 1000.0f); 
+                predForce -= (predVel / v) * dragMag;
+                
+                // Magnus Effect Lift Tensor
+                if (std::abs(predAngVel) > 0.1f) {
+                    float spinRatio = (injectRadius * predAngVel) / v;
+                    float cl = std::min(std::max(spinRatio, -1.5f), 1.5f);
+                    float liftMag = 0.5f * 1.225f * vSq * cl * area;
+                    predForce += Vec2{-(predVel.y/v), (predVel.x/v)} * liftMag;
+                }
+            }
+            
+            // Advance prediction state
+            predVel += (world.gravity + predForce * (1.0f / injectMass)) * fixedTimeStep;
+            
+            // Apply identical engine speed limit to prediction
+            if (predVel.LengthSq() > 300.0f * 300.0f) {
+                predVel = predVel / predVel.Length() * 300.0f;
+            }
+            
+            predPos += predVel * fixedTimeStep;
+            
+            // Apply environment wall/floor collisions to predictor for accurate bouncing
+            float e = 0.4f; // The combined restitution std::min(0.4f, 0.5f)
+            float mu = 0.5f; // Friction
+            
+            // Floor Collision (y=0)
+            if (predPos.y - injectRadius < 0.0f && predVel.y < 0.0f) {
+                predPos.y = injectRadius;
+                predVel.y = -predVel.y * e;
+                predVel.x *= (1.0f - mu * 0.05f); // Simple friction
+            }
+            // Left Wall Collision (x=-55)
+            if (predPos.x - injectRadius < -55.0f && predVel.x < 0.0f) {
+                predPos.x = -55.0f + injectRadius;
+                predVel.x = -predVel.x * e;
+                predVel.y *= (1.0f - mu * 0.05f);
+            }
+            // Right Wall Collision (x=55)
+            if (predPos.x + injectRadius > 55.0f && predVel.x > 0.0f) {
+                predPos.x = 55.0f - injectRadius;
+                predVel.x = -predVel.x * e;
+                predVel.y *= (1.0f - mu * 0.05f);
+            }
+
+            // Collisions with other balls in the simulation
+            for (const auto& b : world.bodies) {
+                if (b.shape == ShapeType::CIRCLE) {
+                    Vec2 diff = predPos - b.position;
+                    float distSq = diff.LengthSq();
+                    float combinedRadius = injectRadius + b.radius;
+                    if (distSq < combinedRadius * combinedRadius && distSq > 0.0001f) {
+                        float dist = std::sqrt(distSq);
+                        Vec2 normal = diff / dist;
+                        // Push out of collision
+                        predPos += normal * (combinedRadius - dist);
+                        // Reflect velocity (bounce off the existing ball)
+                        float relVel = predVel.Dot(normal); 
+                        if (relVel < 0.0f) {
+                            // Apply bouncy restitution combined with the other ball
+                            float combinedRestitution = std::min(e, b.restitution);
+                            predVel -= normal * ((1.0f + combinedRestitution) * relVel);
+                            // Damping / Friction
+                            predVel *= 0.95f; 
+                        }
+                    }
+                }
+            }
+            
+            // Render Prediction Vector Arc (Fade out progressively)
+            DrawLine3D({oldPos.x, oldPos.y, 0.0f}, {predPos.x, predPos.y, 0.0f}, Fade(GREEN, 1.0f - (float)k/predictionSteps));
+            
+            if (k == predictionSteps - 1) {
+                ghostPosition = predPos;
+            }
+        }
+        EndBlendMode();
+        rlSetLineWidth(1.0f);
+
+        // Draw the predicted future location (Ghost Shadow)
+        DrawSphere({ghostPosition.x, ghostPosition.y, 0.0f}, injectRadius, Fade(GREEN, 0.6f));
+        DrawSphereWires({ghostPosition.x, ghostPosition.y, 0.0f}, injectRadius, 8, 8, DARKGREEN);
+
+        // Draw joints (Kinematic Constraints)
         for (const auto& j : world.joints) {
             Vector3 pA = {world.bodies[j.bodyA].position.x, world.bodies[j.bodyA].position.y, 0.0f};
             Vector3 pB = {world.bodies[j.bodyB].position.x, world.bodies[j.bodyB].position.y, 0.0f};
@@ -99,13 +241,15 @@ int main() {
         for (const auto& body : world.bodies) {
             if (body.shape == ShapeType::CIRCLE) {
                 Vector3 pos = { body.position.x, body.position.y, 0.0f };
+                // Keep it clean
+                DrawSphere(pos, body.radius, Fade(RED, 0.8f));
+                
+                // Standard wires
                 Vector3 endPos = { 
                     body.position.x + std::cos(body.angle) * body.radius, 
                     body.position.y + std::sin(body.angle) * body.radius, 
                     0.0f 
                 };
-                
-                DrawSphere(pos, body.radius, Fade(RED, 0.8f));
                 DrawSphereWires(pos, body.radius, 8, 8, BLACK); 
                 DrawLine3D(pos, endPos, BLACK); 
             } 
@@ -113,18 +257,43 @@ int main() {
                 Vector3 pos = { body.position.x, body.position.y, 0.0f };
                 float w = body.half_size.x * 2.0f;
                 float h = body.half_size.y * 2.0f;
-                DrawCube(pos, w, h, 10.0f, Fade(DARKGRAY, 0.9f));
-                DrawCubeWires(pos, w, h, 10.0f, BLACK);
+                DrawCube(pos, w, h, 2.0f, Fade(DARKGRAY, 0.9f)); 
+                DrawCubeWires(pos, w, h, 2.0f, BLACK);
             }
         }
 
         EndMode3D();
         
-        DrawRectangle(0, 0, GetScreenWidth(), 90, Fade(BLACK, 0.8f));
-        DrawText("RESEARCH LAB PHYSICS SIMULATION", 15, 10, 20, GREEN);
-        DrawText("- WASD & Mouse to fly around the lab", 15, 35, 14, LIGHTGRAY);
-        DrawText("- LEFT CLICK to fire heavy tungsten spheres", 15, 55, 14, RED);
-        DrawText(TextFormat("Total Bodies: %d | Total Joints: %d", (int)world.bodies.size(), (int)world.joints.size()), 15, 75, 12, GRAY);
+        // Heads Up Display (HUD) for researcher
+        DrawRectangle(0, 0, GetScreenWidth(), 170, Fade(BLACK, 0.8f));
+        
+        DrawText("AERODYNAMIC PHYSICS SIMULATOR v4.0 (Ghost Prediction)", 15, 10, 20, GREEN);
+        
+        // Flight parameters info panel
+        DrawText(TextFormat("Injection Velocity:   %.1f m/s", injectSpeed), 400, 15, 15, YELLOW);
+        DrawText(TextFormat("Injection Spin rate:  %.1f rad/s", injectSpin), 400, 35, 15, ORANGE);
+        DrawText(TextFormat("Particle Radius:      %.2f m", injectRadius), 400, 55, 15, VIOLET);
+        DrawText(TextFormat("Particle Mass:        %.1f kg", injectMass), 400, 75, 15, LIGHTGRAY);
+        DrawText(TextFormat("Prediction Time:      %.1f sec", targetGhostTime), 400, 95, 15, LIME);
+
+        // Control binds
+        DrawText("HOTKEYS:", 15, 40, 14, SKYBLUE);
+        DrawText("[1] Preset: Standard Ball (No lift)", 15, 60, 14, LIGHTGRAY);
+        DrawText("[2] Preset: High Spin Curveball (Magnus effect)", 15, 75, 14, LIGHTGRAY);
+        DrawText("[3] Preset: Giant Parachute (High drag surface area)", 15, 90, 14, LIGHTGRAY);
+        
+        DrawText("[E]         Launch Particle", 15, 115, 12, RED);
+        DrawText("[T / Y]     Adjust Target Ghost Time", 15, 130, 12, GREEN);
+        DrawText("[UP/DOWN]   Adjust Speed", 15, 145, 12, GRAY);
+        DrawText("[LEFT/RIGHT] Adjust Spin", 15, 160, 12, GRAY);
+        
+        DrawText(TextFormat("Metrics: %d Bodies | %d Joints", (int)world.bodies.size(), (int)world.joints.size()), 400, 125, 14, DARKGREEN);
+        
+        DrawText(TextFormat("Metrics: %d Bodies | %d Joints", (int)world.bodies.size(), (int)world.joints.size()), 400, 125, 14, (Color){ 0, 255, 150, 255 });
+
+        // Crosshair
+        DrawCircleLines(GetScreenWidth()/2, GetScreenHeight()/2, 4.0f, Fade((Color){0, 255, 150, 255}, 0.5f));
+        DrawPixel(GetScreenWidth()/2, GetScreenHeight()/2, (Color){0, 255, 150, 255});
 
         EndDrawing();
     }
