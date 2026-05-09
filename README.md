@@ -1,50 +1,56 @@
-# CP Physics Engine 2.5D 🚀
+# ⚡ Advanced 2D Computational Kinematics & Aerodynamics Engine
 
-A highly optimized, custom-built 2D physics engine written completely from scratch in C++ and rendered in a 3D environment using **Raylib**. This project demonstrates advanced mathematical concepts in game physics, including rotational dynamics, iterative impulse resolution, and constraint-based soft bodies.
+<div align="center">
 
-## ✨ Features
+![C++](https://shields.io)
+![Raylib](https://shields.io)
+![CMake](https://shields.io)
+![License](https://shields.io)
 
-- **Custom Physics Solver:** Fixed-timestep integration ensuring rock-solid numerical stability (no spirals of death).
-- **Rigid Body Dynamics:** Support for Circle and AABB (Axis-Aligned Bounding Box) colliders.
-- **Angular/Rotational Physics:** Calculates moment of inertia, torque, and angular velocity. Objects tumble and rotate accurately upon off-center collisions.
-- **Constraint System:** Distance joints and spring forces enable the creation of soft bodies (squishy cubes) and complex structures like suspension bridges.
-- **Friction & Restitution:** Tunable bounciness and realistic rotational friction across surfaces.
-- **Interactive First-Person Camera:** Free-look camera system to fly around the simulation.
-- **Projectile Interaction:** Left-click to fire high-velocity "tungsten spheres" into the physics environment to test stability and watch structures collapse!
+**A high-performance C++ simulation engine implementing symplectic numerical integration, iterative constraint solvers, and lift-induced aerodynamics.**
 
-## 🎮 Controls
+</div>
 
-Your cursor is locked to the window for first-person interaction.
+---
 
-- **`W` `A` `S` `D`** - Move around the lab
-- **`Mouse`** - Look around
-- **`Left Click`** - Shoot a high-velocity physics sphere
-- **`ESC`** - Exit the simulation
+## 🚀 Overview
+This project is a strictly logic-driven, algorithmic physics engine designed for deterministic kinematic simulations. Moving beyond simple particle systems, it features a **Sequential Impulse Solver** to handle rigid/soft body constraints and a **Symplectic Forward-Predictor** for real-time trajectory verification.
 
-## 🛠️ Build Instructions
+Rendering is decoupled from the physics core, utilizing a Raylib-based 2D-into-3D projection plane to observe complex physical interactions at high fidelity.
 
-### Prerequisites
-- **C++ Compiler:** `g++` (MinGW-w64 on Windows)
-- **Library:** `Raylib`
+## 🧠 Technical Implementation
 
-### Compiling on Windows
+### 1. Numerical Integration: Symplectic Euler
+To ensure long-term energy conservation in oscillatory systems (like mass-spring lattices), the engine utilizes **Semi-Implicit (Symplectic) Euler** integration. By updating velocity before position, the solver remains volume-preserving in phase space, preventing the numerical "explosion" typical of standard explicit methods.
 
-Open your terminal in the project directory and run the following command:
+### 2. Constraint & Impulse Solver
+The engine models contacts as non-linear constraints resolved via **Sequential Impulses**. 
+- **Manifold Generation:** Accurate calculation of contact normals, penetration depths, and contact points.
+- **Iterative Convergence:** A Gauss-Seidel approach iterates over all active manifolds to converge on a stable global state, effectively resolving resting contacts and stacked bodies.
+- **Baumgarte Stabilization:** Used for positional correction to mitigate "sinking" without introducing artificial kinetic energy.
 
-```powershell
-g++ -O3 main.cpp -o physics_sim.exe -lraylib -lgdi32 -lwinmm
+### 3. Aerodynamics & Magnus Effect
+Includes real-time fluid dynamics approximations for moving projectiles:
+- **Rayleigh Drag:** Quadratic velocity-based air resistance.
+- **Magnus Lift Tensor:** Real-time calculation of lift induced by angular velocity, allowing for realistic "curve-ball" trajectories based on the spin ratio of the body.
+
+### 4. Deterministic Trajectory Predictor
+A high-speed "Ghost" system that performs a multi-step numerical look-ahead. It fast-forwards the engine's exact integration logic (including drag and lift) to project a mathematically perfect future state of the system before it occurs.
+
+## ⚡ Key Features
+- **Rigid Body Dynamics:** Full support for mass, inertia, and rotational friction.
+- **Soft Body Lattice:** Mass-spring systems with cross-bracing for structural integrity.
+- **Fixed-Timestep Accumulator:** Decoupled physics logic ($120$ Hz) to guarantee deterministic behavior across different hardware.
+- **Optimized Memory Layout:** Flat-vector allocations to maximize CPU cache coherency during the integration loop.
+
+## 🛠 Build & Requirements
+- **Standard:** C++17 or higher.
+- **Dependencies:** [Raylib](https://raylib.com).
+
+```bash
+# Compilation example
+g++ main.cpp -o physics_sim -std=c++17 -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 ```
 
-Then run the executable:
-
-```powershell
-.\physics_sim.exe
-```
-
-## 🧠 Under the Hood
-
-The engine uses an **Iterative Impulse-based Solver**. For every physics step:
-1. Iterates over all bodies, integrating forces and gravity to calculate new velocities.
-2. Checks for collisions (Circle vs Circle, AABB vs AABB, Circle vs AABB) and creates collision manifolds.
-3. Resolves collisions over multiple iterations (default 15) to calculate linear and rotational impulses exactly at the point of contact.
-4. Applies positional correction to mitigate floating-point errors and sinking.
+## 📜 License
+This project is licensed under the **MIT License** - see the LICENSE file for details.
