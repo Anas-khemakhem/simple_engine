@@ -2,10 +2,10 @@
 
 <div align="center">
 
-![C++](https://shields.io)
-![Raylib](https://shields.io)
-![Physics](https://shields.io)
-![Math](https://shields.io)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?style=for-the-badge&logo=c%2B%2B)](https://isocpp.org/)
+[![Raylib](https://img.shields.io/badge/Raylib-Graphics-black?style=for-the-badge)](https://www.raylib.com/)
+[![Physics](https://img.shields.io/badge/Physics-Simulation-red?style=for-the-badge)](https://en.wikipedia.org/wiki/Physics)
+[![Math](https://img.shields.io/badge/Math-Numerical%20Methods-purple?style=for-the-badge)](https://en.wikipedia.org/wiki/Numerical_analysis)
 
 **A high-performance C++ simulation engine implementing symplectic numerical integration, iterative constraint solvers, and lift-induced aerodynamics.**
 
