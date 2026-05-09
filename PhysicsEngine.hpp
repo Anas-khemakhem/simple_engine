@@ -314,7 +314,7 @@ public:
                     if (std::abs(jt) < j * mu) {
                         frictionImpulse = tangent * jt;
                     } else {
-                        frictionImpulse = tangent * (-j * mu);
+                        frictionImpulse = tangent * (j * mu * (jt > 0 ? 1.0f : -1.0f));
                     }
                     
                     m.a->velocity -= frictionImpulse * m.a->inv_mass;

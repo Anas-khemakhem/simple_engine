@@ -83,12 +83,18 @@ int main() {
         float t_val = (0.0f - camera.position.z) / (fwd.z != 0 ? fwd.z : 0.001f);
         Vector3 hitPoint = Vector3Add(camera.position, Vector3Scale(fwd, t_val));
 
-        // Use KEY_E (or 'é') to launch instead of mouse clicks so it doesn't happen accidentally
-        if (IsKeyPressed(KEY_E)) {
-            // Kinematic particle injection
+        if (IsKeyPressed(KEY_TWO)) { 
+            // Pressing '2' (or 'é' on AZERTY) launches a spinning ball directly
             size_t bId = world.AddBody(RigidBody::CreateCircle(Vec2{hitPoint.x, hitPoint.y}, injectRadius, injectMass, 0.4f));
             world.bodies[bId].velocity = Vec2{fwd.x, fwd.y} * injectSpeed; 
-            world.bodies[bId].angular_velocity = injectSpin; 
+            world.bodies[bId].angular_velocity = 200.0f; 
+        }
+
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            // Normal kinematic particle injection (No Spin)
+            size_t bId = world.AddBody(RigidBody::CreateCircle(Vec2{hitPoint.x, hitPoint.y}, injectRadius, injectMass, 0.4f));
+            world.bodies[bId].velocity = Vec2{fwd.x, fwd.y} * injectSpeed; 
+            world.bodies[bId].angular_velocity = 0.0f; 
         }
 
         // Fixed timestep for physics stability
@@ -156,11 +162,12 @@ int main() {
                     float spinRatio = (injectRadius * predAngVel) / v;
                     float cl = std::min(std::max(spinRatio, -1.5f), 1.5f);
                     float liftMag = 0.5f * 1.225f * vSq * cl * area;
-                    predForce += Vec2{-(predVel.y/v), (predVel.x/v)} * liftMag;
+                    predForce += Vec2{(predVel.y/v), -(predVel.x/v)} * liftMag; // Matches PhysicsEngine Cross() direction
                 }
             }
             
             // Advance prediction state
+            predAngVel -= predAngVel * 0.1f * fixedTimeStep; // Dampen prediction spin accurately
             predVel += (world.gravity + predForce * (1.0f / injectMass)) * fixedTimeStep;
             
             // Apply identical engine speed limit to prediction
@@ -170,52 +177,70 @@ int main() {
             
             predPos += predVel * fixedTimeStep;
             
-            // Apply environment wall/floor collisions to predictor for accurate bouncing
-            float e = 0.4f; // The combined restitution std::min(0.4f, 0.5f)
-            float mu = 0.5f; // Friction
+            // MATH: Perfect collision prediction matching PhysicsEngine logic
+            RigidBody ghostBody = RigidBody::CreateCircle(predPos, injectRadius, injectMass, 0.4f);
+            ghostBody.velocity = predVel;
+            ghostBody.angular_velocity = predAngVel;
             
-            // Floor Collision (y=0)
-            if (predPos.y - injectRadius < 0.0f && predVel.y < 0.0f) {
-                predPos.y = injectRadius;
-                predVel.y = -predVel.y * e;
-                predVel.x *= (1.0f - mu * 0.05f); // Simple friction
-            }
-            // Left Wall Collision (x=-55)
-            if (predPos.x - injectRadius < -55.0f && predVel.x < 0.0f) {
-                predPos.x = -55.0f + injectRadius;
-                predVel.x = -predVel.x * e;
-                predVel.y *= (1.0f - mu * 0.05f);
-            }
-            // Right Wall Collision (x=55)
-            if (predPos.x + injectRadius > 55.0f && predVel.x > 0.0f) {
-                predPos.x = 55.0f - injectRadius;
-                predVel.x = -predVel.x * e;
-                predVel.y *= (1.0f - mu * 0.05f);
-            }
+            for (auto& b : world.bodies) {
+                Manifold m;
+                if (b.shape == ShapeType::AABB) {
+                    m = CheckCircleVsAABB(&ghostBody, &b);
+                } else if (b.shape == ShapeType::CIRCLE) {
+                    m = CheckCircleVsCircle(&ghostBody, &b);
+                }
+                
+                if (m.colliding) {
+                    // Resolve penetration directly (move AWAY from collision)
+                    ghostBody.position -= m.normal * m.penetration;
+                    
+                    // Simple inelastic bounce matching the Engine's exact restitution and physics
+                    Vec2 refA = m.contact - ghostBody.position;
+                    Vec2 velA = ghostBody.velocity + Cross(ghostBody.angular_velocity, refA);
+                    
+                    // We treat the environment and other balls as static for the sake of the trajectory line 
+                    Vec2 rv = velA * (-1.0f); // b.velocity is 0 from the predictor's perspective
 
-            // Collisions with other balls in the simulation
-            for (const auto& b : world.bodies) {
-                if (b.shape == ShapeType::CIRCLE) {
-                    Vec2 diff = predPos - b.position;
-                    float distSq = diff.LengthSq();
-                    float combinedRadius = injectRadius + b.radius;
-                    if (distSq < combinedRadius * combinedRadius && distSq > 0.0001f) {
-                        float dist = std::sqrt(distSq);
-                        Vec2 normal = diff / dist;
-                        // Push out of collision
-                        predPos += normal * (combinedRadius - dist);
-                        // Reflect velocity (bounce off the existing ball)
-                        float relVel = predVel.Dot(normal); 
-                        if (relVel < 0.0f) {
-                            // Apply bouncy restitution combined with the other ball
-                            float combinedRestitution = std::min(e, b.restitution);
-                            predVel -= normal * ((1.0f + combinedRestitution) * relVel);
-                            // Damping / Friction
-                            predVel *= 0.95f; 
+                    float contactVel = rv.Dot(m.normal);
+                    if (contactVel > 0) continue;
+
+                    float e = std::min(0.4f, b.restitution); // bounce factor
+                    
+                    float raCrossN = Cross(refA, m.normal);
+                    float invMassSum = ghostBody.inv_mass + (raCrossN * raCrossN) * ghostBody.inv_inertia;
+                    
+                    float j = -(1.0f + e) * contactVel / invMassSum;
+                    Vec2 impulse = m.normal * j;
+                    
+                    // Apply Normal Impulse
+                    ghostBody.velocity -= impulse * ghostBody.inv_mass;
+                    ghostBody.angular_velocity -= ghostBody.inv_inertia * Cross(refA, impulse);
+                    
+                    // Friction prediction
+                    Vec2 tangent = rv - (m.normal * rv.Dot(m.normal));
+                    if (tangent.LengthSq() > 0.0001f) {
+                        tangent = tangent / tangent.Length();
+                        float raCrossT = Cross(refA, tangent);
+                        float invMassFrictionSum = ghostBody.inv_mass + (raCrossT * raCrossT) * ghostBody.inv_inertia;
+                        
+                        float jt = -rv.Dot(tangent) / invMassFrictionSum;
+                        float mu = std::sqrt(ghostBody.friction * b.friction);
+                        
+                        Vec2 frictionImpulse;
+                        if (std::abs(jt) < j * mu) {
+                            frictionImpulse = tangent * jt;
+                        } else {
+                            frictionImpulse = tangent * (j * mu * (jt > 0 ? 1.0f : -1.0f));
                         }
+                        ghostBody.velocity -= frictionImpulse * ghostBody.inv_mass;
+                        ghostBody.angular_velocity -= ghostBody.inv_inertia * Cross(refA, frictionImpulse);
                     }
                 }
             }
+            
+            predPos = ghostBody.position;
+            predVel = ghostBody.velocity;
+            predAngVel = ghostBody.angular_velocity;
             
             // Render Prediction Vector Arc (Fade out progressively)
             DrawLine3D({oldPos.x, oldPos.y, 0.0f}, {predPos.x, predPos.y, 0.0f}, Fade(GREEN, 1.0f - (float)k/predictionSteps));
@@ -282,10 +307,9 @@ int main() {
         DrawText("[2] Preset: High Spin Curveball (Magnus effect)", 15, 75, 14, LIGHTGRAY);
         DrawText("[3] Preset: Giant Parachute (High drag surface area)", 15, 90, 14, LIGHTGRAY);
         
-        DrawText("[E]         Launch Particle", 15, 115, 12, RED);
-        DrawText("[T / Y]     Adjust Target Ghost Time", 15, 130, 12, GREEN);
-        DrawText("[UP/DOWN]   Adjust Speed", 15, 145, 12, GRAY);
-        DrawText("[LEFT/RIGHT] Adjust Spin", 15, 160, 12, GRAY);
+        DrawText("[T / Y]     Adjust Target Ghost Time", 15, 115, 12, GREEN);
+        DrawText("[UP/DOWN]   Adjust Speed", 15, 130, 12, GRAY);
+        DrawText("[LEFT/RIGHT] Adjust Spin", 15, 145, 12, GRAY);
         
         DrawText(TextFormat("Metrics: %d Bodies | %d Joints", (int)world.bodies.size(), (int)world.joints.size()), 400, 125, 14, DARKGREEN);
         
